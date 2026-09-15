@@ -1,0 +1,111 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional: build deploy/render/Dockerfile in CI and publish it to GHCR, so Render
+# never compiles the frontend. Copy it into .github/workflows/ to enable:
+#
+#   cp deploy/render/build-image.yaml .github/workflows/open-webui-slim-image.yaml
+#
+# Why this exists: the SvelteKit/vite build peaks above what Render's free build box
+# can hold, and every failed attempt still burns ~15 min of the workspace's ~500
+# free build minutes. A hosted GitHub runner has 16 GB and is free for public repos,
+# so building here is both more reliable and $0. `docker.yaml` in this repo does the
+# same thing for the standard image, which is where the heap number below comes from.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Build slim image (GHCR)
+
+on:
+  workflow_dispatch:
+    inputs:
+      sourcemap:
+        description: 'Frontend sourcemaps (off keeps the build memory-hungry step small)'
+        type: choice
+        required: true
+        default: 'off'
+        options: ['off', 'on']
+      heap_mb:
+        description: 'Node heap cap for the vite build; 12288 matches upstream CI'
+        required: true
+        type: string
+        default: '6144'
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - 'src/**'
+      - 'static/**'
+      - 'backend/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'svelte.config.js'
+      - 'Dockerfile'
+      - 'deploy/render/**'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: slim-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve image name
+        id: img
+        run: |
+          # GHCR requires a lowercase path; derive it from this repo's slug.
+          echo "name=${REGISTRY,,}/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')-slim" >>"$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Single platform on purpose: Render and Hugging Face Spaces both run
+      # linux/amd64 here, and skipping QEMU/multi-arch removes most of the build
+      # time. Add a matrix + buildx create --append if you want arm64 too.
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deploy/render/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.img.outputs.name }}:latest
+            ${{ steps.img.outputs.name }}:${{ github.sha }}
+          build-args: |
+            BUILD_HASH=${{ github.sha }}
+            SOURCEMAP=${{ inputs.sourcemap || 'off' }}
+            NODE_MAX_OLD_SPACE_SIZE=${{ inputs.heap_mb || '6144' }}
+          cache-from: type=registry,ref=${{ steps.img.outputs.name }}:buildcache
+          cache-to: type=registry,ref=${{ steps.img.outputs.name }}:buildcache,mode=max
+
+      - name: Point Render at this image
+        run: |
+          {
+            echo "### Image published"
+            echo ""
+            echo "Set \`render.yaml\` to pull it instead of building:"
+            echo ""
+            echo '```yaml'
+            echo "    runtime: image"
+            echo "    image: ${{ steps.img.outputs.name }}:latest"
+            echo '```'
+            echo ""
+            echo "Image services do not auto-deploy on push - trigger them from the"
+            echo "dashboard, a deploy hook, or the API."
+          } >>"$GITHUB_STEP_SUMMARY"

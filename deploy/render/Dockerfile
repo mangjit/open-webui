@@ -15,33 +15,55 @@
 #
 # Build:
 #   docker build -f deploy/render/Dockerfile -t open-webui-slim .
+#   # on a small builder, keep sourcemaps off (default) and raise the heap:
+#   docker build -f deploy/render/Dockerfile \
+#     --build-arg NODE_MAX_OLD_SPACE_SIZE=12288 -t open-webui-slim .
+#   # or let CI build it: ./build-image.yaml
 # Run:
 #   docker run --rm -p 8080:8080 -e OPENAI_API_KEY=... -e WEBUI_SECRET_KEY=... \
 #     -v open-webui-slim:/app/backend/data open-webui-slim
 # Render (see ./README.md and ../../render.yaml) builds this image for you.
 
+# Frontend build memory. `vite.config.ts` ships with `sourcemap: true`, and the
+# SvelteKit rollup graph is big enough that upstream's own release workflow forces
+# `--max-old-space-size=12288` on a 16 GB GitHub runner (see
+# .github/workflows/docker.yaml, "Prepare CI Dockerfile"). Two knobs here let a
+# smaller builder succeed instead: a tunable heap, and dropping sourcemaps, which
+# is most of the peak allocation for a build nobody will debug in the browser.
+#
+# If `npm run build` still dies with "Reached heap limit ... JavaScript heap out
+# of memory", the builder is too small - no build-arg fixes that. Build in CI
+# (./build-image.yaml) and let Render pull the image; deploy/render/README.md.
 ARG NODE_IMAGE=node:22-alpine3.20
 ARG PYTHON_IMAGE=python:3.11-slim-bookworm
+ARG NODE_MAX_OLD_SPACE_SIZE=6144
+ARG SOURCEMAP=off
 
 ######## Frontend ########
 FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS build
 ARG BUILD_HASH=slim-build
+ARG NODE_MAX_OLD_SPACE_SIZE
+ARG SOURCEMAP
 
 WORKDIR /app
 
 # git is only needed so vite can record the revision in the bundle
 RUN apk add --no-cache git
 
-# The vite build is the memory-hungry step; cap the heap so it fails with a clear
-# JS OOM instead of being kernel-killed, and keep it inside a 4 GB build box.
-ENV NODE_OPTIONS=--max-old-space-size=3072 \
+ENV NODE_OPTIONS=--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE} \
     APP_BUILD_HASH=${BUILD_HASH}
 
 COPY package.json package-lock.json ./
 RUN npm ci --force --no-audit --no-fund
 
 COPY . .
-RUN npm run build
+
+# Patched in-image rather than in the repo: the frontend build is the deploy
+# target's problem, and vite.config.ts must stay untouched for everyone else.
+RUN if [ "${SOURCEMAP}" = "off" ]; then \
+        sed -i 's/sourcemap: true/sourcemap: false/' vite.config.ts; \
+    fi \
+    && npm run build
 
 ######## Backend + runtime ########
 FROM ${PYTHON_IMAGE} AS runtime

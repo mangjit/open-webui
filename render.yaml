@@ -15,6 +15,12 @@
 #     embedding/STT models). Measured in a clean-room run of this repo:
 #     healthy /health in ~9 s at 349 MB RSS — i.e. it does fit in 512 MB, but
 #     only just, and only for a single low-traffic user.
+#   * Building THIS repo needs a big builder regardless of the runtime plan: the
+#     vite/SvelteKit build peaks around 3 GB+ of heap (upstream's CI forces
+#     12288 MB on a 16 GB runner), so Render's free build box aborts with
+#     "JavaScript heap out of memory". Build the image in CI
+#     (./deploy/render/build-image.yaml) and set `runtime: image` to pull it.
+#     Details: ./deploy/render/README.md#build-oom-javascript-heap-out-of-memory
 #
 # Everything below is deliberately safe-by-default for a throwaway demo. The
 # paid upgrade paths (more RAM, real disk, Postgres) are documented inline and in
@@ -33,8 +39,10 @@ services:
 
     healthCheckPath: /health
 
-    # Render rebuilds on every commit; each build of this repo costs ~10 min of
-    # your free build minutes. Set to `off` and deploy manually to conserve them.
+    # Render rebuilds on every commit. On the free plan each attempt costs ~15 min
+    # of your ~500 free build minutes AND is likely to OOM the frontend build (see
+    # the header), so `off` + manual deploys is the sane setting until you switch to
+    # `runtime: image`. Use `[skip render]` in a commit message to skip one deploy.
     autoDeployTrigger: commit
 
     # Only works on paid plans (`disk` is rejected on `plan: free`). Uncomment the

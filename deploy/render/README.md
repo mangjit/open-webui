@@ -38,8 +38,11 @@ second concurrent chat, WebSocket-heavy channels, uploading a file (chroma inges
    and lists one service, `open-webui`.
 3. Expand the service and fill in the values Render asks for (`OPENAI_API_KEY`; anything
    marked `sync: false` is prompted because no value is committed in the blueprint).
-4. Approve. First deploy builds the image (npm build + pip) in ~10-15 min; free build
-   minutes are consumed by that build.
+4. Approve. That first deploy runs `npm ci` + `vite build` + `pip install` inside
+   Render's build box. **On `plan: free` it will very likely die** with
+   `FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory`
+   — see [Build OOM](#build-oom-javascript-heap-out-of-memory) two sections down for
+   the fix, which is a one-time CI build rather than a bigger number.
 5. Open the `*.onrender.com` URL, sign up **once** — `ENABLE_SIGNUP=false` means the
    first admin account is the only one you can create, and
    `ENABLE_INITIAL_ADMIN_SIGNUP=true` is what keeps that first signup possible.
@@ -74,25 +77,69 @@ Add to `envVars`:
 outlives a redeploy. `psycopg[binary]` is already in the requirements set, so no image
 change is needed.
 
-### Build elsewhere, deploy the image
+### Build OOM: `JavaScript heap out of memory`
 
-Render's free build quota (and its build box) is the flakiest part of this setup. Build
-in GitHub Actions instead and let Render pull the result:
+What the log looks like when you hit it:
+
+```
+[783:0x...] 73538 ms: Mark-Compact 3058.3 (3119.9) -> 3056.3 (3120.9) MB ...
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+ERROR: process "/bin/sh -c npm run build" did not complete successfully: exit code: 134
+```
+
+Exit 134 = SIGABRT from V8, and the numbers tell you which limit you hit: the heap died
+just under the `--max-old-space-size` the build was given, so the *builder ran out of
+addressable memory*, not the app. This is a build-time-only problem — the runtime image
+needs 349 MB, nowhere near this.
+
+Why it's this bad: `vite.config.ts` sets `build.sourcemap = true`, and the SvelteKit
+rollup graph for this UI is large enough that **upstream forces `--max-old-space-size=12288`
+on a 16 GB GitHub runner** to build it (`.github/workflows/docker.yaml` → "Prepare CI
+Dockerfile"). A free Render builder is far below that, and raising the number on a small
+machine just swaps a V8 abort for a kernel OOM kill.
+
+Three ways out, best first:
+
+1. **Build in CI, deploy the image** (recommended; also stops burning build minutes):
+   copy `build-image.yaml` into `.github/workflows/`, let it push
+   `ghcr.io/<owner>/<repo>-slim:latest`, then swap `render.yaml`'s three
+   `runtime: docker` lines for:
+   ```yaml
+       runtime: image
+       image: ghcr.io/<owner>/<repo>-slim:latest
+   ```
+   Caveat worth knowing up front, from Render's own docs: *"Services that use a
+   prebuilt Docker image ... must be deployed manually"* — no auto-deploy on push.
+   Trigger it from **Manual Deploy** in the dashboard, a [deploy
+   hook](https://render.com/docs/deploy-hooks), or the API. You re-deploy when you want
+   a new image, which for a demo is the right cadence anyway.
+2. **Turn sourcemaps off and raise the heap** on whatever box you already have:
+   ```bash
+   docker build -f deploy/render/Dockerfile \
+     --build-arg SOURCEMAP=off --build-arg NODE_MAX_OLD_SPACE_SIZE=12288 \
+     -t open-webui-slim .
+   ```
+   `SOURCEMAP=off` is already the Dockerfile default (it patches `vite.config.ts`
+   inside the build, not in git) — the heap is the one to raise, and it needs a builder
+   with roughly 2x that much RAM free.
+3. **Pay for a bigger builder**: bump the service to a paid plan and check its
+   Settings for a build instance type before assuming the free box is the only option.
+
+`SOURCEMAP=on` restores upstream behaviour (bigger image, slower build, debuggable
+production JS) — nothing else in the image changes.
+
+### Build by hand
+
+If you'd rather not add a workflow, the same image from any machine with Docker:
 
 ```bash
 docker build -f deploy/render/Dockerfile -t ghcr.io/<you>/open-webui-slim:latest .
 docker push ghcr.io/<you>/open-webui-slim:latest   # public package = free on GHCR
 ```
 
-then in `render.yaml` replace the three `runtime: docker` lines with:
-
-```yaml
-    runtime: image
-    image: ghcr.io/<you>/open-webui-slim:latest
-```
-
-That removes build minutes from the equation entirely (Render skips the build and just
-pulls), and `autoDeployTrigger: commit` can stay on since a re-pull is cheap.
+`build-image.yaml` in this directory is exactly these two commands plus registry
+caching, a paths filter so doc-only pushes don't rebuild, and amd64-only (Render is
+x86_64, so QEMU and the multi-arch tax are skipped).
 
 ## What is missing versus the standard image, and why
 
@@ -113,8 +160,9 @@ pulls), and `autoDeployTrigger: commit` can stay on since a re-pull is cheap.
 | --- | --- |
 | deploy log: `Container killed due to out of memory` | over 512 MB — see the paid row above, or set `ENABLE_WEBSOCKET_SUPPORT=false` |
 | "Service is starting" for minutes, then 502 | free tier cold start on 0.1 CPU; disable the health check path temporarily if Render aborts the deploy (Settings → Health Checks) |
-| build fails in `npm run build` with a JS heap error | build box too small; raise `NODE_OPTIONS=--max-old-space-size=` in `Dockerfile` or build in CI |
-| build fails with `exceeded free build minutes` | 500 min/month shared per workspace → switch to `runtime: image`, or `autoDeployTrigger: off` |
+| `npm run build` fails with `JavaScript heap out of memory`, exit 134 | the builder is too small for this frontend — [Build OOM](#build-oom-javascript-heap-out-of-memory) |
+| `npm run build` killed with exit 137 instead | heap cap exceeded the box's RAM, so the kernel killed node; lower `NODE_MAX_OLD_SPACE_SIZE` or use a bigger builder |
+| build fails with `exceeded free build minutes` | 500 min/month shared per workspace → build in CI (`runtime: image`), and use `[skip render]` in commit messages or Settings → Build Filters so doc-only pushes don't rebuild |
 | login works, then logs out a few minutes later | `WEBUI_SECRET_KEY` changed (a regenerated blueprint value does this) — set it explicitly |
 | everything I did is gone next morning | expected on free: no disk. Use `DATABASE_URL` or a paid disk |
 | first visit is fine, second visitor times out | one sleeping instance + 0.1 CPU; this tier is single-user by construction |

@@ -5,7 +5,7 @@ each. Neither is production-grade, and the platform limits are the reason.
 
 | Directory | What it is | Build | Notes |
 | --- | --- | --- | --- |
-| [`render/`](render/README.md) | `render.yaml` blueprint + a slim `Dockerfile` sized for 512 MB | Render builds it, ~10-15 min | $0, demo-grade, filesystem is wiped by design |
+| [`render/`](render/README.md) | `render.yaml` blueprint + a slim `Dockerfile` sized for 512 MB | Render builds it (or CI does — [it must, on free](render/README.md#build-oom-javascript-heap-out-of-memory)) | $0, demo-grade, filesystem is wiped by design |
 | [`huggingface/`](huggingface/README.md) | `scripts/deploy-hf-space.sh` + the 2 files a Docker Space needs | Space builds it, ~1 min (image mode) | 2 vCPU / 16 GB, but creating a Docker Space needs a paid Hub plan |
 
 ## The limits that drive every decision here
