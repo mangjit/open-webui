@@ -1,0 +1,116 @@
+# Render Blueprint for Open WebUI — low-memory deployment.
+#
+# Review this file before you click "Deploy": Render applies it as
+# infrastructure-as-code, and every service in it is created in your workspace.
+#
+# Reality check (Render's own limits, verified 2026-09):
+#   * plan `free` = 0.1 CPU / 512 MB RAM, sleeps after 15 min with no traffic,
+#     ~750 instance hours and ~500 build minutes per workspace per month.
+#   * Free services CANNOT attach a persistent disk; anything written to the
+#     container filesystem (SQLite DB, uploads, chroma vectors) is wiped on every
+#     redeploy and every spin-down.
+#   * The stock ghcr.io/open-webui/open-webui image pulls in PyTorch + Whisper +
+#     sentence-transformers and needs roughly 1-2 GB, so it gets OOM-killed here.
+#   * ./deploy/render/Dockerfile builds a slim image instead (no torch, no local
+#     embedding/STT models). Measured in a clean-room run of this repo:
+#     healthy /health in ~9 s at 349 MB RSS — i.e. it does fit in 512 MB, but
+#     only just, and only for a single low-traffic user.
+#
+# Everything below is deliberately safe-by-default for a throwaway demo. The
+# paid upgrade paths (more RAM, real disk, Postgres) are documented inline and in
+# ./deploy/render/README.md.
+
+services:
+  - type: web
+    name: open-webui
+    runtime: docker
+    dockerfilePath: ./deploy/render/Dockerfile
+    dockerContext: .
+
+    # Swap to `1c-2g` (or `0.5c-512mb`) the moment this is more than a demo.
+    plan: free
+    region: oregon # cannot be changed after creation
+
+    healthCheckPath: /health
+
+    # Render rebuilds on every commit; each build of this repo costs ~10 min of
+    # your free build minutes. Set to `off` and deploy manually to conserve them.
+    autoDeployTrigger: commit
+
+    # Only works on paid plans (`disk` is rejected on `plan: free`). Uncomment the
+    # block below together with `plan: 1c-2g` to keep chats/uploads across deploys.
+    #
+    # disk:
+    #   name: open-webui-data
+    #   mountPath: /app/backend/data
+    #   sizeGB: 1
+
+    envVars:
+      # Signing key for session JWTs. `generateValue` gives Render mint one; note
+      # that a regenerated value logs everyone out. Replace with a real secret if
+      # you keep users across redeploys.
+      - key: WEBUI_SECRET_KEY
+        generateValue: true
+
+      # --- Model provider (OpenAI-compatible) ---
+      # Secret: create it in the dashboard, or leave `sync: false` so Render
+      # prompts you for the value on the first deploy.
+      - key: OPENAI_API_KEY
+        sync: false
+      # OpenRouter free models work too: https://openrouter.ai/api/v1
+      - key: OPENAI_API_BASE_URL
+        value: https://api.openai.com/v1
+
+      # No room for a bundled Ollama on 512 MB — turn the integration off so the
+      # UI doesn't spend startup time probing a non-existent backend.
+      - key: ENABLE_OLLAMA_API
+        value: 'false'
+
+      # --- Memory/behaviour tuning for tiny instances ---
+      # Empty embedding/reranker models keep torch out of the process. RAG over
+      # uploaded files then needs an external embedding engine (Ollama/OpenAI),
+      # i.e. file chat works but "hybrid search + rerank" does not.
+      - key: RAG_EMBEDDING_MODEL
+        value: ''
+      - key: RAG_RERANKING_MODEL
+        value: ''
+      # Caches the tiktoken BPE file under DATA_DIR so a mounted disk keeps it.
+      - key: TIKTOKEN_CACHE_DIR
+        value: /app/backend/data/cache/tiktoken
+      # One uvicorn worker is all 512 MB can hold. Do not raise it here.
+      - key: UVICORN_WORKERS
+        value: '1'
+      # WebSocket fan-out is the fastest way to blow the memory ceiling; flip to
+      # 'false' if you see OOM kills, at the cost of live sync / channels.
+      - key: ENABLE_WEBSOCKET_SUPPORT
+        value: 'true'
+
+      # --- Safety on a public *.onrender.com URL ---
+      # Anyone who finds the URL can make an account unless signup is closed.
+      - key: ENABLE_SIGNUP
+        value: 'false'
+      - key: ENABLE_INITIAL_ADMIN_SIGNUP
+        value: 'true'
+      - key: ANONYMIZED_TELEMETRY
+        value: 'false'
+      - key: SCARF_NO_ANALYTICS
+        value: 'true'
+      - key: DO_NOT_TRACK
+        value: 'true'
+
+  # Optional, still $0: a free external Postgres (Neon/Supabase) so your chats
+  # survive Render's ephemeral filesystem. Open WebUI picks it up from
+  # DATABASE_URL; copy the connection string into the dashboard, then uncomment:
+  #
+  #   - key: DATABASE_URL
+  #     sync: false   # postgresql://user:pass@ep-xxx.neon.tech/neondb?sslmode=require
+  #
+  # With Postgres, also move RAG vectors off the local disk:
+  #
+  #   - key: VECTOR_DB
+  #     value: pgvector
+
+  # Render's own managed Postgres is NOT an option here: it needs a paid plan and
+  # a blueprint cannot create a `plan: free` database for a `plan: free` service.
+  # - type: pserv        # (not supported on free; shown for structure only)
+  #   name: open-webui-db

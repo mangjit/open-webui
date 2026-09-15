@@ -1,0 +1,36 @@
+# Slim-runtime add-ons for very small instances (e.g. Render's 512 MB free tier).
+#
+# backend/requirements-min.txt is labelled "WIP" upstream and is not quite enough
+# to boot the server: open-webui imports a few of these at module scope, so the
+# process dies with ModuleNotFoundError during startup instead of at first use.
+# This file is the delta that makes the "min" set actually boot, with the same
+# pins the repo uses in backend/requirements.txt so versions never drift from the
+# main dependency set.
+#
+# Verified: `requirements-min.txt` + this file boots the app to a healthy
+# `GET /health -> {"status":true}` with ~340 MB RSS and no PyTorch /
+# sentence-transformers / faster-whisper installed.
+#
+# Deliberately NOT installed here (all optional, imported lazily, and each one is
+# hundreds of MB): torch, torchvision, sentence-transformers, faster-whisper,
+# docling, markitdown, unstructured, tika, opencv, playwright. Anything in
+# Settings that needs them must stay disabled — see deploy/README.md.
+
+python-mimeparse==2.0.0       # open_webui/utils/misc -> import mimeparse
+pytz==2026.2                  # schedules / automations timezone handling
+tiktoken==0.13.0              # routers/retrieval.py (token accounting)
+Markdown==3.10.2              # env.py / description sanitising
+lxml==6.1.1                   # bs4 parser + markdown extensions
+beautifulsoup4                # HTML parsing in the web loader
+validators==0.35.0            # retrieval/web/utils.py -> validate_url
+pillow==12.2.0                # routers/images.py -> from PIL import Image
+fpdf2==2.8.7                  # PDF export of chats (module name: fpdf)
+ddgs==9.14.4                  # DuckDuckGo search engine import chain
+youtube-transcript-api==1.2.4 # media/YouTube loader import chain
+ldap3==2.9.1                  # routers/users.py LDAP auth import chain
+boto3==1.42.62                # storage/provider.py S3 backend import chain
+azure-identity==1.25.3        # storage/provider.py Azure backend import chain
+azure-storage-blob==12.29.0   # storage/provider.py Azure backend import chain
+google-auth-oauthlib==1.4.0   # storage/provider.py GCS backend import chain
+google-cloud-storage==3.9.0   # storage/provider.py GCS backend import chain
+opensearch-py==3.2.0          # retrieval vector DB import chain

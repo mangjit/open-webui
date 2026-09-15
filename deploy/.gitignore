@@ -1,0 +1,4 @@
+# local, git-ignored copies of a Space payload / env file the deploy scripts produce
+*.env
+space-stage/
+.hf-space/

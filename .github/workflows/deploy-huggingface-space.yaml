@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Publish this repo to a Hugging Face Space (manually, or pinned to a tag).
+# Needs a Space the account may create: Docker Spaces require a paid Hub plan,
+# see deploy/huggingface/README.md step 0.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Deploy Hugging Face Space
+
+on:
+  workflow_dispatch:
+    inputs:
+      space:
+        description: 'Target Space repo id, e.g. jane/open-webui'
+        required: true
+        type: string
+      mode:
+        description: 'image = FROM a published tag (fast); source = build this repo'
+        type: choice
+        required: true
+        default: image
+        options: [image, source]
+      image_tag:
+        description: 'ghcr.io/open-webui/open-webui tag (image mode only)'
+        required: true
+        type: string
+        default: main
+      create_space:
+        description: 'Create the Space first if it does not exist'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-huggingface-space
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `git archive` in --from-source mode only needs the shipped revision,
+          # and tags must be present for `--tag v...` style refs to resolve.
+          fetch-depth: 0
+
+      - name: Stage and push
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ inputs.space }}
+          HF_ORG: ${{ vars.HF_ORG }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          chmod +x scripts/deploy-hf-space.sh
+
+          args=(--space "$HF_SPACE")
+          if [ '${{ inputs.mode }}' = 'source' ]; then
+            args+=(--from-source)
+          else
+            args+=(--tag '${{ inputs.image_tag }}')
+          fi
+          if [ '${{ inputs.create_space }}' = 'true' ]; then
+            args+=(--create)
+          fi
+
+          ./scripts/deploy-hf-space.sh "${args[@]}"
+
+      # The Space rebuilds asynchronously; surface where to look rather than
+      # blocking the runner on someone else's queue.
+      - name: Summarise
+        run: |
+          echo "### Space deploy triggered" >>"$GITHUB_STEP_SUMMARY"
+          echo "" >>"$GITHUB_STEP_SUMMARY"
+          echo "Space: <https://huggingface.co/spaces/${{ inputs.space }}>" >>"$GITHUB_STEP_SUMMARY"
+          echo "Mode: \`${{ inputs.mode }}\`" >>"$GITHUB_STEP_SUMMARY"
+          echo "" >>"$GITHUB_STEP_SUMMARY"
+          echo "Build logs: Space → Settings → \"View build logs\". Set variables and"
+          echo "secrets per \`deploy/huggingface/space.env.example\` before first use." >>"$GITHUB_STEP_SUMMARY"
