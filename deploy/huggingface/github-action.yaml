@@ -1,7 +1,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Publish this repo to a Hugging Face Space (manually, or pinned to a tag).
-# Needs a Space the account may create: Docker Spaces require a paid Hub plan,
-# see deploy/huggingface/README.md step 0.
+# Optional: publish this repo to a Hugging Face Space from CI.
+#
+# This is a TEMPLATE, not an active workflow. To enable it:
+#     cp deploy/huggingface/github-action.yaml .github/workflows/deploy-huggingface-space.yaml
+# then add an `HF_TOKEN` repository secret (a write-scoped Hub token) and run it
+# from Actions → "Deploy Hugging Face Space".
+#
+# It only shells out to scripts/deploy-hf-space.sh, so everything it can do, you
+# can do from a laptop with the same two env vars. Creating the target Space still
+# requires a paid Hub plan - see README.md step 0.
 # ─────────────────────────────────────────────────────────────────────────────
 name: Deploy Hugging Face Space
 

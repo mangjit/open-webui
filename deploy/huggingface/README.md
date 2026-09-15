@@ -61,6 +61,18 @@ mount path `/data` (Settings → Volumes); `space/Dockerfile` already sets
 are paid — that is the honest price of a durable Space. No bucket ⇒ expect to
 re-create your admin account after each rebuild.
 
+## Optional: deploy from CI
+
+`github-action.yaml` in this directory is a ready-made `workflow_dispatch` wrapper
+around the same script (it is a template on purpose, so nothing runs on a push until
+you copy it into `.github/workflows/`):
+
+```bash
+cp deploy/huggingface/github-action.yaml .github/workflows/deploy-huggingface-space.yaml
+gh secret set HF_TOKEN          # Hub token, write scope
+gh workflow run "Deploy Hugging Face Space" -f space=<user>/<repo> -f mode=image -f image_tag=main
+```
+
 ## What the script does not do
 
 * It never stores `HF_TOKEN` on disk: git authenticates through a `GIT_ASKPASS`
