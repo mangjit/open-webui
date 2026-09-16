@@ -132,13 +132,28 @@ RUN mkdir -p /app/backend/data/cache/tiktoken \
 # labels requirements-min.txt "WIP"). If this ever fails, the fix is one more line
 # in deploy/render/requirements-addons.txt, not a broken deploy 20 minutes later.
 #
-# Side effect worth knowing about: importing the app runs config.py's branding sync,
-# which clears open_webui/static and re-copies it from /app/build/static. That is
-# what every container does on first boot anyway, so baking it here is idempotent -
-# it just means the image's static dir ends up identical to the frontend build's.
-RUN DATA_DIR=/tmp/smoke FRONTEND_BUILD_DIR=/app/build WEBUI_SECRET_KEY=build-check \
-        python3 -c "import open_webui.main" \
-    && rm -rf /tmp/smoke
+# Two traps this layer used to fall into, both worth the ceremony:
+#   * DATA_DIR must exist before the import. env.py only creates it for pip
+#     installs (FROM_INIT_PY); in this /app/backend layout sqlite just fails with
+#     "unable to open database file", which surfaced here as a bare exit code 1.
+#   * Render's build log truncates long output, so keep startup noise out of it and
+#     print the traceback only when the check actually fails.
+#
+# Side effect worth knowing: importing the app runs config.py's branding sync, which
+# clears open_webui/static and re-copies it from /app/build/static. Every container
+# does that on first boot anyway, so baking it here is idempotent.
+RUN set -eu; \
+    smoke=$$(mktemp -d); \
+    mkdir -p "$$smoke/data"; \
+    if ! DATA_DIR="$$smoke/data" FRONTEND_BUILD_DIR=/app/build WEBUI_SECRET_KEY=build-check \
+        python3 -c "import open_webui.main" >"$$smoke/out.log" 2>&1; then \
+        echo "---- build-time import check failed (last 40 lines) ----"; \
+        tail -40 "$$smoke/out.log"; \
+        echo "---- if this is 'No module named X', add X to deploy/render/requirements-addons.txt ----"; \
+        rm -rf "$$smoke"; \
+        exit 1; \
+    fi; \
+    rm -rf "$$smoke"
 
 EXPOSE 8080
 

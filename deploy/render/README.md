@@ -162,6 +162,8 @@ x86_64, so QEMU and the multi-arch tax are skipped).
 | "Service is starting" for minutes, then 502 | free tier cold start on 0.1 CPU; disable the health check path temporarily if Render aborts the deploy (Settings → Health Checks) |
 | `npm run build` fails with `JavaScript heap out of memory`, exit 134 | the builder is too small for this frontend — [Build OOM](#build-oom-javascript-heap-out-of-memory) |
 | `npm run build` killed with exit 137 instead | heap cap exceeded the box's RAM, so the kernel killed node; lower `NODE_MAX_OLD_SPACE_SIZE` or use a bigger builder |
+| the `import open_webui.main` check layer fails | the slim dependency set stopped covering startup imports (it prints the traceback now); add the missing module to `requirements-addons.txt`, pinned to the version in `backend/requirements.txt` |
+| that same check fails with `unable to open database file` | `DATA_DIR` must exist before the app imports - `env.py` only creates it for pip installs, not this `/app/backend` layout |
 | build fails with `exceeded free build minutes` | 500 min/month shared per workspace → build in CI (`runtime: image`), and use `[skip render]` in commit messages or Settings → Build Filters so doc-only pushes don't rebuild |
 | login works, then logs out a few minutes later | `WEBUI_SECRET_KEY` changed (a regenerated blueprint value does this) — set it explicitly |
 | everything I did is gone next morning | expected on free: no disk. Use `DATABASE_URL` or a paid disk |
