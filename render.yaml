@@ -9,6 +9,10 @@
 #   * Free services CANNOT attach a persistent disk; anything written to the
 #     container filesystem (SQLite DB, uploads, chroma vectors) is wiped on every
 #     redeploy and every spin-down.
+#   * 750 free instance hours are shared per WORKSPACE per month, and a month is
+#     ~730 hours: keep one service awake 24/7 (a ping cron) and that is the entire
+#     budget - run out and Render suspends every free service in the workspace.
+#     Keep-alive template + the math: ./deploy/render/keep-alive.yaml
 #   * The stock ghcr.io/open-webui/open-webui image pulls in PyTorch + Whisper +
 #     sentence-transformers and needs roughly 1-2 GB, so it gets OOM-killed here.
 #   * ./deploy/render/Dockerfile builds a slim image instead (no torch, no local

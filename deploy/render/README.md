@@ -156,6 +156,45 @@ x86_64, so QEMU and the multi-arch tax are skipped).
 | any audio path that shells out to `ffmpeg` | ⚠️ | `pydub` logs `Couldn't find ffmpeg` at boot and audio features stay broken; harmless while STT/TTS are unset, install `ffmpeg` in the image if you enable an engine that needs it |
 | `pyodide` client-side Python in artifacts | ⚠️ built, but heavy | the frontend build still fetches it; delete `static/pyodide` in a fork if you want ~100 MB less image |
 
+## Keeping it awake (and what that costs)
+
+Free services spin down after 15 minutes with no inbound HTTP request or WebSocket
+message, and Render's ~1 minute wake estimate is optimistic for this app: a cold uvicorn
+boot on 0.1 CPU takes minutes. So `deploy/render/keep-alive.yaml` (copy it into
+`.github/workflows/`) pings `/health` on a schedule.
+
+Before you turn it on, the arithmetic that decides everything:
+
+* Render grants **750 free instance hours per workspace per month**, consumed only while
+  a service is awake. A month is **720-744 hours**.
+* One service pinned awake 24/7 therefore uses essentially the whole allowance, and a
+  second one blows it.
+* When the pool is empty Render **suspends every free web service in the workspace**
+  until the next month. Pinging does not outsmart the cap; it spends it.
+
+So: schedule 08:00-20:00 pings (~370 h/month, app warm when you're there) rather than
+24/7, or accept cold starts. And two things that don't work:
+
+* **Render's own Cron Job service** - cron jobs are not offered on `free` (the blueprint
+  compute table for cron starts at `0.5c-512mb`, with no `free` row; only web services
+  have one).
+* **A `setInterval` that pings itself from inside the app** - the popular tutorial
+  answer. It burns the same instance hours, and it's service-initiated outbound
+  traffic, which Render has suspended free services over.
+
+Cheaper tricks that are specific to this app:
+
+* An open browser tab helps: the UI holds a WebSocket (`ENABLE_WEBSOCKET_SUPPORT`) and
+  Render counts WebSocket traffic, so an actively used tab won't sleep. An idle tab may
+  still let it nap.
+* Ping `/health`, never `/` - it's a static JSON handler, no DB round trip, and doesn't
+  pull page rendering into a 512 MB box.
+* Waking is the cheap part; the real cost of sleeping here is the filesystem. Spin-down
+  loses everything under `DATA_DIR`, so SQLite chats vanish whether or not you ping.
+  `DATABASE_URL` at a free external Postgres is the fix; the pinger is cosmetics.
+* Also note Render serves a `robots.txt` that disallows everything while a free service
+  is asleep - if you ever wonder why a crawler saw nothing, that's why.
+
 ## Troubleshooting
 
 | Symptom | Cause |

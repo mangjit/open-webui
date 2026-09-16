@@ -1,0 +1,80 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Keep a Render *free* web service from spinning down, for $0.
+#
+# TEMPLATE - copy it into .github/workflows/ to enable:
+#   cp deploy/render/keep-alive.yaml .github/workflows/open-webui-keep-alive.yaml
+# then set the repository variable:
+#   gh variable set RENDER_HEALTH_URL --body https://<your-service>.onrender.com/health
+#
+# ── READ THE ARITHMETIC BEFORE YOU TURN THIS ON ──────────────────────────────
+# Render grants 750 free instance hours per WORKSPACE per month, and a service only
+# burns them while it is awake. A calendar month is 720-744 hours. So one service
+# pinned awake 24/7 consumes essentially the entire allowance for the whole
+# workspace, and when the pool runs dry Render suspends EVERY free web service in
+# that workspace until the 1st of the next month.
+#
+# The spin-down is not a defect to route around; it is what keeps a free service
+# inside its quota. Two ways to use this file responsibly:
+#   * business-hours pings (cron below) - ~370 h/month, leaves headroom, and the
+#     app is warm exactly when you are at a keyboard;
+#   * 24/7 pings - fine for ONE free service, guaranteed trouble for two.
+# Track spend at Dashboard -> Billing.
+#
+# What NOT to do instead:
+#   * a self-pinging setInterval() inside the app: it burns the same instance hours
+#     and is "service-initiated traffic", which Render has suspended free services
+#     for;
+#   * a Render Cron Job service: cron jobs are not a free-tier service type - the
+#     blueprint compute table lists plans for cron starting at 0.5c-512mb, with no
+#     `free` row (web services have one);
+#   * pinging `/` instead of `/health`: `/` runs the SSR/static-serving path and
+#     pulls more into a 512 MB box for no benefit.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Keep Render service awake
+
+on:
+  schedule:
+    # Every 14 minutes, 08:00-19:46 UTC. Under the 15-minute threshold, and about
+    # half the monthly quota. Times are UTC: adjust to your own working day.
+    - cron: '*/14 8-19 * * *'
+    # 24/7 variant (uses ~the whole 750 h allowance for ONE service):
+    # - cron: '*/14 * * * *'
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Hit /health (retry through a cold start)
+        env:
+          URL: ${{ vars.RENDER_HEALTH_URL }}
+        run: |
+          set -u
+          if [ -z "$URL" ]; then
+            echo "RENDER_HEALTH_URL is not set (gh variable set RENDER_HEALTH_URL --body https://...onrender.com/health)"
+            exit 1
+          fi
+
+          # A free instance can take minutes to answer on 0.1 CPU, so this deliberately
+          # waits through a spin-up rather than reporting a failure. A red check means
+          # the service did not answer in ~5 min, which is worth looking at.
+          ok=0
+          for attempt in 1 2 3 4 5 6; do
+            # No `|| echo 000`: curl already writes 000 for a failed request, and
+            # appending a second value would land in $code as "000000".
+            code=$(curl -sS --max-time 45 -o /dev/null -w '%{http_code}' "$URL" || true)
+            [ -n "$code" ] || code=000
+            echo "attempt $attempt -> HTTP $code"
+            case "$code" in
+              2*) ok=1; break ;;
+            esac
+            sleep 30
+          done
+
+          if [ "$ok" != 1 ]; then
+            echo "::warning::no 2xx from $URL after 6 attempts - service is down, starting, or misconfigured"
+            exit 1
+          fi
