@@ -95,8 +95,10 @@ needs 349 MB, nowhere near this.
 Why it's this bad: `vite.config.ts` sets `build.sourcemap = true`, and the SvelteKit
 rollup graph for this UI is large enough that **upstream forces `--max-old-space-size=12288`
 on a 16 GB GitHub runner** to build it (`.github/workflows/docker.yaml` → "Prepare CI
-Dockerfile"). A free Render builder is far below that, and raising the number on a small
-machine just swaps a V8 abort for a kernel OOM kill.
+Dockerfile"), and even the pip install path sets `--max-old-space-size=8192`
+(`hatch_build.py`). So the practical floor here is ~8 GB of heap, not 3. A free Render
+builder is below either number, and setting the cap above the machine's RAM just swaps a
+V8 abort (exit 134) for a kernel OOM kill (exit 137).
 
 Three ways out, best first:
 
@@ -162,8 +164,9 @@ x86_64, so QEMU and the multi-arch tax are skipped).
 | "Service is starting" for minutes, then 502 | free tier cold start on 0.1 CPU; disable the health check path temporarily if Render aborts the deploy (Settings → Health Checks) |
 | `npm run build` fails with `JavaScript heap out of memory`, exit 134 | the builder is too small for this frontend — [Build OOM](#build-oom-javascript-heap-out-of-memory) |
 | `npm run build` killed with exit 137 instead | heap cap exceeded the box's RAM, so the kernel killed node; lower `NODE_MAX_OLD_SPACE_SIZE` or use a bigger builder |
-| the `import open_webui.main` check layer fails | the slim dependency set stopped covering startup imports (it prints the traceback now); add the missing module to `requirements-addons.txt`, pinned to the version in `backend/requirements.txt` |
-| that same check fails with `unable to open database file` | `DATA_DIR` must exist before the app imports - `env.py` only creates it for pip installs, not this `/app/backend` layout |
+| build succeeds but logs `WARNING: slim-image smoke test failed` | the optional import check tripped. It is warn-only by design (CI passes `SMOKE_STRICT=true`) but read the traceback above it: the container will probably crash on the same import at boot, and `requirements-addons.txt` is where the fix goes |
+| `unable to open database file` from anything that imports the app | `DATA_DIR` must already exist - `env.py` creates it only on the pip-install path (`FROM_INIT_PY`), never for the `/app/backend` layout |
+| the "What's new" / release-notes panel is empty | `/app/CHANGELOG.md` is missing: `env.py` falls back to an *empty* changelog, so a forgotten copy is silent rather than an error |
 | build fails with `exceeded free build minutes` | 500 min/month shared per workspace → build in CI (`runtime: image`), and use `[skip render]` in commit messages or Settings → Build Filters so doc-only pushes don't rebuild |
 | login works, then logs out a few minutes later | `WEBUI_SECRET_KEY` changed (a regenerated blueprint value does this) — set it explicitly |
 | everything I did is gone next morning | expected on free: no disk. Use `DATABASE_URL` or a paid disk |

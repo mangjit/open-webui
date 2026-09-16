@@ -25,7 +25,7 @@ on:
         description: 'Node heap cap for the vite build; 12288 matches upstream CI'
         required: true
         type: string
-        default: '6144'
+        default: '8192'
   push:
     branches:
       - main
@@ -90,7 +90,11 @@ jobs:
           build-args: |
             BUILD_HASH=${{ github.sha }}
             SOURCEMAP=${{ inputs.sourcemap || 'off' }}
-            NODE_MAX_OLD_SPACE_SIZE=${{ inputs.heap_mb || '6144' }}
+            NODE_MAX_OLD_SPACE_SIZE=${{ inputs.heap_mb || '8192' }}
+            # The Dockerfile only warns on a failed import check, because Render
+            # offers no way to pass build args and a guard must not block a deploy.
+            # In CI the log is easy to read and a rebuild is free, so fail there.
+            SMOKE_STRICT=true
           cache-from: type=registry,ref=${{ steps.img.outputs.name }}:buildcache
           cache-to: type=registry,ref=${{ steps.img.outputs.name }}:buildcache,mode=max
 
