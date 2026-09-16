@@ -34,3 +34,13 @@ azure-storage-blob==12.29.0   # storage/provider.py Azure backend import chain
 google-auth-oauthlib==1.4.0   # storage/provider.py GCS backend import chain
 google-cloud-storage==3.9.0   # storage/provider.py GCS backend import chain
 opensearch-py==3.2.0          # retrieval vector DB import chain
+
+## Database drivers not in requirements-min
+# internal/db.py runs TWO engines: the async one (all runtime queries) uses psycopg v3,
+# which requirements-min does ship, but the sync one - startup migrations, config loading,
+# alembic, health checks - uses SQLAlchemy's default `postgresql` dialect, which is psycopg2.
+# Without this line, setting DATABASE_URL=postgresql://... dies at boot with
+# "ModuleNotFoundError: No module named 'psycopg2'" from run_migrations(), which re-raises.
+# Verified against sqlalchemy==2.0.50 in a clean venv: create_engine('postgresql://') raises
+# without it and reports dialect.driver == psycopg2 with it.
+psycopg2-binary==2.9.12       # same pin as backend/requirements.txt

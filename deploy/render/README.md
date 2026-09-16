@@ -74,8 +74,45 @@ Add to `envVars`:
 
 `backend/open_webui/env.py` falls back to `sqlite:///$DATA_DIR/webui.db` when
 `DATABASE_URL` is unset, so this is the one variable that decides whether your data
-outlives a redeploy. `psycopg[binary]` is already in the requirements set, so no image
-change is needed.
+outlives a redeploy.
+
+This image needs `psycopg2-binary` for that, and it is now in
+`requirements-addons.txt` - it was missing, which made every external-Postgres
+instruction in this file unusable. The reason is that `internal/db.py` builds two
+engines: `create_async_engine()` on a URL rewritten to `postgresql+psycopg://` (psycopg
+v3, present in `requirements-min.txt`) for all runtime queries, while the **sync**
+engine - startup migrations, config loading, health checks - consumes the URL untouched,
+so `postgresql://` resolves to SQLAlchemy's default **psycopg2** dialect. Before the fix
+the container crashed at boot, because `config.py:run_migrations()` logs and re-raises.
+
+### What MongoDB does here: nothing
+
+`pymongo` appears in `backend/requirements.txt` under a "## Databases" heading, and the
+app never imports it - there is no `MongoClient` anywhere in `backend/`. `DATABASE_URL` is
+handed to SQLAlchemy, which speaks SQLite/Postgres; there is no code path that would talk
+document-store protocol. So a Mongo instance will not become the chat/settings store, and
+nothing will complain when you configure one.
+
+The silent-skip is worth knowing about, because it looks like a half-working setup:
+
+```python
+# env.py - only used when EVERY one of these five is set
+DB_VARS = {'db_type': DATABASE_TYPE, 'db_cred': ..., 'db_host': ..., 'db_port': ..., 'db_name': ...}
+if all(DB_VARS.values()):
+    DATABASE_URL = f'{db_type}://{db_cred}@{db_host}:{db_port}/{db_name}'
+```
+
+Any gap in that set - a password left blank, no `DATABASE_PORT` - and the whole branch is
+skipped with no log line and no error: `DATABASE_URL` keeps its SQLite default and the
+app quietly runs on the ephemeral file. Two more traps in the same area:
+
+* `DATABASE_URL=""` (explicitly empty) is **not** the same as unset: `os.getenv` returns the
+  empty string, the SQLite fallback never applies, and engine construction fails. Omit the
+  variable, don't blank it.
+* `postgres://` is accepted and rewritten to `postgresql://`, but a **pooled** Neon
+  connection string is the one that works from Render (the serverless driver endpoint
+  speaks HTTP, not libpq). Keep `?sslmode=require`.
+
 
 ### Build OOM: `JavaScript heap out of memory`
 
@@ -272,4 +309,7 @@ already-issued HTTP cookies keep the rest of the app apparently fine. `render.ya
 | build fails with `exceeded free build minutes` | 500 min/month shared per workspace → build in CI (`runtime: image`), and use `[skip render]` in commit messages or Settings → Build Filters so doc-only pushes don't rebuild |
 | login works, then logs out a few minutes later | `WEBUI_SECRET_KEY` changed (a regenerated blueprint value does this) — set it explicitly |
 | everything I did is gone next morning | expected on free: no disk. Use `DATABASE_URL` or a paid disk |
+| boot crash `ModuleNotFoundError: No module named 'psycopg2'` after setting `DATABASE_URL` | image built before `psycopg2-binary` was added to `requirements-addons.txt` - rebuild, or drop `DATABASE_URL` until you do |
+| `DATABASE_URL` seems ignored / data still lands in `webui.db` | if you set `DATABASE_TYPE`/`DATABASE_HOST`/... instead, all five are required or the block is skipped silently; or `DATABASE_URL` is set to the empty string, which defeats the SQLite fallback |
+| chats and settings never persist at all | on `plan: free` there is no disk, so SQLite at `DATA_DIR` is wiped on every restart - that is the platform, not a bug; `DATABASE_URL` to external Postgres is the only durable $0 option |
 | first visit is fine, second visitor times out | one sleeping instance + 0.1 CPU; this tier is single-user by construction |
