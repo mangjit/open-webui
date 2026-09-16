@@ -89,11 +89,21 @@ services:
       # Caches the tiktoken BPE file under DATA_DIR so a mounted disk keeps it.
       - key: TIKTOKEN_CACHE_DIR
         value: /app/backend/data/cache/tiktoken
-      # One uvicorn worker is all 512 MB can hold. Do not raise it here.
+      # One uvicorn worker is all 512 MB can hold - and do not raise it without also
+      # setting WEBSOCKET_MANAGER=redis + REDIS_URL. That is not only memory: streamed
+      # chat events are emitted to the room `user:<id>` and *skipped silently* when that
+      # room is not in the emitting process (socket/main.py: `if WEBSOCKET_MANAGER ==
+      # 'redis' or room in sio.manager.rooms...`), while the DB write next to it always
+      # runs. Two workers without Redis therefore means: answer generated, saved, and
+      # never shown until you refresh.
       - key: UVICORN_WORKERS
         value: '1'
-      # WebSocket fan-out is the fastest way to blow the memory ceiling; flip to
-      # 'false' if you see OOM kills, at the cost of live sync / channels.
+      # true  -> socket.io over a real WebSocket upgrade (server sets transports=
+      #          ['websocket'], allow_upgrades=False, so there is NO polling fallback)
+      # false -> socket.io over HTTP long-polling: chattier per token, but survives any
+      #          proxy/restart/network that eats the upgrade.
+      # If the UI stops live-updating but a refresh shows the reply, this is the knob.
+      # See ./deploy/render/README.md ("Reply arrives but the UI never updates").
       - key: ENABLE_WEBSOCKET_SUPPORT
         value: 'true'
 

@@ -195,11 +195,74 @@ Cheaper tricks that are specific to this app:
 * Also note Render serves a `robots.txt` that disallows everything while a free service
   is asleep - if you ever wonder why a crawler saw nothing, that's why.
 
+## Reply arrives but the UI never updates (refresh shows it)
+
+Classic symptom: the message reaches the model, the reply is in the logs and in the
+database, and the chat pane stays on "..." until you hard-reload. Nothing is broken in
+the model path - the two directions of a chat use *different transports*:
+
+| direction | transport |
+| --- | --- |
+| your message | plain `fetch` POST to `/api/chat/completions` (`generateOpenAIChatCompletion`) |
+| every streamed delta | socket.io, `sio.emit('events', ..., room=f'user:{user_id}')` |
+
+and the emit is guarded:
+
+```python
+# backend/open_webui/socket/main.py, in get_event_emitter()
+if WEBSOCKET_MANAGER == 'redis' or room in sio.manager.rooms.get('/', {}):
+    await sio.emit('events', {...}, room=room)
+# no else: no matching room in this process = the event is dropped silently
+```
+
+The `save_to_chat` upsert right below it runs either way. So **any** condition that keeps
+the socket from being registered in the *same process* as the completion produces exactly
+"works, but only visible after a refresh". In order of how often each is the cause:
+
+1. **`UVICORN_WORKERS` > 1 with no Redis.** The socket lives on one worker, the request is
+   served by another, the room lookup misses, events vanish. Set it back to `1`, or give
+   it a real fan-out bus: `WEBSOCKET_MANAGER=redis` + `REDIS_URL` (Render's free Key Value
+   instance - 25 MB, no persistence - is adequate for this; it needs no durability, only
+   reach).
+2. **The WebSocket upgrade never completes.** With `ENABLE_WEBSOCKET_SUPPORT=true` both
+   ends are websocket-only - the client sets `transports: ['websocket']` and the server
+   `transports=['websocket'], allow_upgrades=False` - so there is no fallback to try.
+   Set `ENABLE_WEBSOCKET_SUPPORT=false` in Render's Settings (no rebuild): socket.io then
+   runs over HTTP long-polling, which gets through anything a WS upgrade can't, and the
+   live delta path works again.
+3. **A tab that outlived a restart, on a temporary chat.** The UI does resume in-flight
+   generations after a reconnect (`handleSocketConnect` re-attaches via
+   `getTaskIdsByChatId`), but that path returns early for temp chats and unsaved chats -
+   so if you use temporary chats, a mid-stream blip is genuinely unrecoverable and a
+   refresh is the only fix.
+
+Confirm which one it is in about two minutes, before changing anything:
+
+* DevTools → Console: the app logs `connected <socket.id>` when the socket is up and
+  `connect_error <...>` when it isn't. No `connected` line = case 2.
+* DevTools → Network → filter `ws` (or search `socket.io`): the request to
+  `/ws/socket.io/?EIO=4&transport=websocket` must end at **101 Switching Protocols**.
+  A 400/401/500 means the handshake is being refused; no request at all means the client
+  never tried (then check `/api/config` -> `features.enable_websocket`).
+* Render → Service → Environment: verify `UVICORN_WORKERS=1` is what is actually live, not
+  just what the blueprint says - dashboard edits override the file.
+* A throttling excuse can be ruled out from the code: `THROTTLE_INTERVAL = 0.15` caps
+  deltas at ~6/sec, but the final `done` event is emitted unconditionally, so a merely
+  slow box would still finish the message on its own. Nothing at all arriving means the
+  event never reached the socket, not that it was rate-limited.
+
+Also worth knowing: `WEBUI_SECRET_KEY` must be a set env var, not left to `start.sh`.
+Without it, the key is generated into the container filesystem, and free-tier filesystems
+are wiped on restart - every socket then fails its `auth: { token }` handshake while
+already-issued HTTP cookies keep the rest of the app apparently fine. `render.yaml` sets
+`generateValue` for exactly this reason.
+
 ## Troubleshooting
 
 | Symptom | Cause |
 | --- | --- |
 | deploy log: `Container killed due to out of memory` | over 512 MB — see the paid row above, or set `ENABLE_WEBSOCKET_SUPPORT=false` |
+| reply is generated (in the log and after a refresh) but never streams into the UI | the delta transport, not the model: see "Reply arrives but the UI never updates" above — `UVICORN_WORKERS=1` or `ENABLE_WEBSOCKET_SUPPORT=false` |
 | "Service is starting" for minutes, then 502 | free tier cold start on 0.1 CPU; disable the health check path temporarily if Render aborts the deploy (Settings → Health Checks) |
 | `npm run build` fails with `JavaScript heap out of memory`, exit 134 | the builder is too small for this frontend — [Build OOM](#build-oom-javascript-heap-out-of-memory) |
 | `npm run build` killed with exit 137 instead | heap cap exceeded the box's RAM, so the kernel killed node; lower `NODE_MAX_OLD_SPACE_SIZE` or use a bigger builder |
