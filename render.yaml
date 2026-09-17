@@ -76,6 +76,25 @@ services:
         value: 'true'
       - key: ANONYMIZED_TELEMETRY
         value: 'false'
+
+      # ---- Low-RAM tuning (512 MB free tier) ----
+      # Skip the plugins/tools dependency machinery (pip installs at boot).
+      # Nothing custom is installed for basic chat testing anyway.
+      - key: ENABLE_PLUGINS
+        value: 'false'
+      # Cap native thread pools / allocators that otherwise over-reserve.
+      - key: OMP_NUM_THREADS
+        value: '1'
+      - key: MKL_NUM_THREADS
+        value: '1'
+      - key: OPENBLAS_NUM_THREADS
+        value: '1'
+      - key: TOKENIZERS_PARALLELISM
+        value: 'false'
+      - key: MALLOC_ARENA_MAX
+        value: '2'
+      - key: UVICORN_WORKERS
+        value: '1'
       # Render routes traffic to the port your service binds. Pinning this
       # explicitly (Render's default is 10000) removes any doubt about
       # $PORT injection on image-runtime services — start.sh honors it.

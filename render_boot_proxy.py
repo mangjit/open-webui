@@ -173,6 +173,55 @@ async def readiness_watcher():
         await asyncio.sleep(3)
 
 
+async def memory_monitor():
+    """Log backend + container memory every 30s.
+
+    On tiny boxes (Render free = 512 MB) the kernel OOM-killer can SIGKILL
+    the whole container without a single log line. These readings make that
+    visible: if RSS climbs to the cgroup max and the container restarts,
+    it's OOM — not a hang.
+    """
+    while not _shutting_down:
+        await asyncio.sleep(30)
+        if _shutting_down:
+            break
+        try:
+            info = []
+            if _child_proc is not None and _child_proc.pid:
+                try:
+                    with open(f"/proc/{_child_proc.pid}/status") as f:
+                        for line in f:
+                            if line.startswith("VmRSS:"):
+                                info.append(f"backend_RSS={line.split()[1]}kB")
+                                break
+                except FileNotFoundError:
+                    info.append("backend_gone")
+            read_cgroup = False
+            for path, label in (
+                ("/sys/fs/cgroup/memory.current", "used"),
+                ("/sys/fs/cgroup/memory.max", "max"),
+            ):
+                try:
+                    with open(path) as f:
+                        info.append(f"cgroup_{label}={f.read().strip()}")
+                        read_cgroup = True
+                except FileNotFoundError:
+                    pass
+            if not read_cgroup:  # cgroup v1 fallback
+                for path, label in (
+                    ("/sys/fs/cgroup/memory/memory.usage_in_bytes", "used"),
+                    ("/sys/fs/cgroup/memory/memory.limit_in_bytes", "max"),
+                ):
+                    try:
+                        with open(path) as f:
+                            info.append(f"cgroup_{label}={f.read().strip()}")
+                    except FileNotFoundError:
+                        pass
+            log("mem:", " ".join(info) if info else "unavailable")
+        except Exception as exc:
+            log("mem monitor error:", repr(exc))
+
+
 async def main():
     global _child_proc, _shutting_down
     loop = asyncio.get_running_loop()
@@ -212,9 +261,11 @@ async def main():
     log(f"proxy listening on 0.0.0.0:{PUBLIC_PORT} (deploy will go live now)")
 
     watcher = asyncio.create_task(readiness_watcher())
+    monitor = asyncio.create_task(memory_monitor())
     rc = await _child_proc.wait()  # backend exited (crash or stop)
     _shutting_down = True
     watcher.cancel()
+    monitor.cancel()
     server.close()
     await server.wait_closed()
     log(f"backend exited with code {rc} -> proxy exiting")
