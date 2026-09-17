@@ -1,45 +1,67 @@
-# Render Blueprint for Open WebUI — one-click deploy of this repo.
+# Render Blueprint for Open WebUI — FREE-tier testing setup.
 # Docs: https://render.com/docs/blueprint-spec
 #
-# NOTE on sizing: Open WebUI needs real RAM (model libs, embeddings).
-# - `standard` (2 GB RAM) is the recommended minimum.
-# - `starter` (512 MB) will very likely OOM-crash.
-# - A persistent disk is required (paid plans) so users, chats, uploads
-#   and the vector DB survive deploys/restarts.
+# How this works on the free plan (no persistent disk allowed):
+# - Runs the prebuilt `slim` image (fast deploy, lower RAM than building this repo).
+# - Chats, users & settings persist in an external Postgres DB (free from Neon/Supabase).
+# - Knowledge/RAG vectors live in the SAME Postgres via pgvector (no extra service).
+# - Embeddings run via OpenAI's API instead of a local model (saves ~1 GB RAM,
+#   which is what makes 512 MB workable at all).
+#
+# Free-tier limits to expect: 512 MB RAM (basic chat only, heavy RAG may OOM),
+# service spins down after 15 min idle (cold start takes a few minutes),
+# uploaded files are ephemeral unless you add S3 storage (see guide below).
+#
+# To switch to building THIS repo instead of the prebuilt image, replace
+# `runtime: image` + `image:` with:
+#     runtime: docker
+#     dockerfilePath: ./Dockerfile
+#     dockerContext: .
+# (Full build needs a paid plan: slower, heavier, and needs a disk.)
 
 services:
   - type: web
     name: open-webui
-    runtime: docker
-    plan: standard
+    runtime: image
+    image:
+      url: ghcr.io/open-webui/open-webui:slim
+    plan: free
     region: oregon
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
     healthCheckPath: /health
-    disk:
-      name: open-webui-data
-      mountPath: /app/backend/data
-      sizeGB: 10
     envVars:
-      # Auto-generated session secret (don't share / don't change after first boot
-      # or existing logins get invalidated).
+      # Auto-generated session secret. Don't change after first boot
+      # or existing logins get invalidated.
       - key: WEBUI_SECRET_KEY
         generateValue: true
 
-      # Leave empty unless you run Ollama somewhere reachable.
-      # Render has no GPU and this service doesn't bundle Ollama,
-      # so point this at an external Ollama host or leave blank and
-      # use OpenAI-compatible APIs instead.
-      - key: OLLAMA_BASE_URL
-        value: ''
-
-      # Set these in the Render dashboard (or later in Admin Panel → Connections).
-      # `sync: false` means Render prompts for them at deploy time.
-      - key: OPENAI_API_BASE_URL
+      # ---- Persistence (all free-tier compatible) ----
+      # External Postgres (REQUIRED on free plan — no disk available).
+      # Free options: Neon (neon.tech) or Supabase — both support pgvector.
+      # Format: postgresql://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require
+      - key: DATABASE_URL
         sync: false
+
+      # Store RAG/knowledge vectors in the same Postgres (via pgvector).
+      # PGVECTOR_DB_URL defaults to DATABASE_URL, so nothing else to set —
+      # just enable the `vector` extension once (see deploy guide).
+      - key: VECTOR_DB
+        value: pgvector
+
+      # ---- LLM + embeddings (OpenAI-compatible) ----
+      # Needed for chat AND for embeddings (avoids loading a local model into RAM).
       - key: OPENAI_API_KEY
         sync: false
+      - key: OPENAI_API_BASE_URL
+        sync: false
+      - key: RAG_EMBEDDING_ENGINE
+        value: openai
+      - key: RAG_EMBEDDING_MODEL
+        value: text-embedding-3-small
 
+      # ---- Misc ----
+      # Leave empty unless you run Ollama somewhere reachable.
+      - key: OLLAMA_BASE_URL
+        value: ''
       - key: WEBUI_NAME
         value: Open WebUI
       - key: FORWARDED_ALLOW_IPS
@@ -52,3 +74,19 @@ services:
         value: 'false'
       # Render injects $PORT (default 10000) at runtime and start.sh
       # already honors it — do NOT hardcode PORT here.
+
+      # ---- Optional: persistent file uploads via S3-compatible storage ----
+      # Without this, uploaded files/avatars vanish on restart/redeploy.
+      # Free option: Cloudflare R2 (10 GB free). Uncomment + fill in to use:
+      # - key: STORAGE_PROVIDER
+      #   value: s3
+      # - key: S3_ENDPOINT_URL
+      #   sync: false  # e.g. https://<accountid>.r2.cloudflarestorage.com
+      # - key: S3_BUCKET_NAME
+      #   sync: false
+      # - key: S3_ACCESS_KEY_ID
+      #   sync: false
+      # - key: S3_SECRET_ACCESS_KEY
+      #   sync: false
+      # - key: S3_REGION_NAME
+      #   value: auto
