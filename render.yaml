@@ -1,0 +1,54 @@
+# Render Blueprint for Open WebUI — one-click deploy of this repo.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# NOTE on sizing: Open WebUI needs real RAM (model libs, embeddings).
+# - `standard` (2 GB RAM) is the recommended minimum.
+# - `starter` (512 MB) will very likely OOM-crash.
+# - A persistent disk is required (paid plans) so users, chats, uploads
+#   and the vector DB survive deploys/restarts.
+
+services:
+  - type: web
+    name: open-webui
+    runtime: docker
+    plan: standard
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    disk:
+      name: open-webui-data
+      mountPath: /app/backend/data
+      sizeGB: 10
+    envVars:
+      # Auto-generated session secret (don't share / don't change after first boot
+      # or existing logins get invalidated).
+      - key: WEBUI_SECRET_KEY
+        generateValue: true
+
+      # Leave empty unless you run Ollama somewhere reachable.
+      # Render has no GPU and this service doesn't bundle Ollama,
+      # so point this at an external Ollama host or leave blank and
+      # use OpenAI-compatible APIs instead.
+      - key: OLLAMA_BASE_URL
+        value: ''
+
+      # Set these in the Render dashboard (or later in Admin Panel → Connections).
+      # `sync: false` means Render prompts for them at deploy time.
+      - key: OPENAI_API_BASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+      - key: WEBUI_NAME
+        value: Open WebUI
+      - key: FORWARDED_ALLOW_IPS
+        value: '*'
+      - key: SCARF_NO_ANALYTICS
+        value: 'true'
+      - key: DO_NOT_TRACK
+        value: 'true'
+      - key: ANONYMIZED_TELEMETRY
+        value: 'false'
+      # Render injects $PORT (default 10000) at runtime and start.sh
+      # already honors it — do NOT hardcode PORT here.
