@@ -26,9 +26,9 @@
 services:
   - type: web
     name: open-webui
-    runtime: image
-    image:
-      url: ghcr.io/open-webui/open-webui:slim
+    runtime: docker
+    dockerfilePath: ./Dockerfile.render-free
+    dockerContext: .
     plan: free
     region: oregon
     healthCheckPath: /health
