@@ -1,0 +1,9 @@
+# Render FREE-tier image: prebuilt slim Open WebUI + instant-bind boot proxy.
+# The proxy opens $PORT in <1s (satisfies Render's port scan) while the real
+# app warms up behind it on 127.0.0.1:8081. Pure TCP piping, so websockets
+# and SSE streaming keep working. See render_boot_proxy.py.
+FROM ghcr.io/open-webui/open-webui:slim
+
+ENV PYTHONUNBUFFERED=1
+COPY render_boot_proxy.py /app/render_boot_proxy.py
+CMD ["python3", "/app/render_boot_proxy.py"]

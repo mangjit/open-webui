@@ -2,22 +2,26 @@
 # Docs: https://render.com/docs/blueprint-spec
 #
 # How this works on the free plan (no persistent disk allowed):
-# - Runs the prebuilt `slim` image (fast deploy, lower RAM than building this repo).
+# - Builds a tiny wrapper image (Dockerfile.render-free) FROM the prebuilt
+#   `slim` image: fast build, no compiling, low RAM.
+# - The wrapper runs a boot proxy (render_boot_proxy.py) that opens $PORT in
+#   <1s so Render's port scan passes, while the real app warms up behind it
+#   on 127.0.0.1:8081. Open the URL early and you'll see a "warming up" page
+#   that auto-refreshes until the app is ready (a few minutes on 0.1 CPU).
 # - Chats, users & settings persist in an external Postgres DB (free from Neon/Supabase).
 # - Knowledge/RAG vectors live in the SAME Postgres via pgvector (no extra service).
-# - Embeddings run via OpenAI's API instead of a local model (saves ~1 GB RAM,
-#   which is what makes 512 MB workable at all).
+# - Embeddings run via OpenAI's API instead of a local model, and Torch /
+#   sentence-transformers / ChromaDB are all lazily imported, so none of them
+#   load — this is what makes 512 MB RAM workable.
 #
-# Free-tier limits to expect: 512 MB RAM (basic chat only, heavy RAG may OOM),
-# service spins down after 15 min idle (cold start takes a few minutes),
-# uploaded files are ephemeral unless you add S3 storage (see guide below).
+# Free-tier limits to expect: service spins down after 15 min idle (cold start
+# takes a few minutes — use a free UptimeRobot ping every 5 min to keep it
+# warm; 24/7 still fits in the 750 free hours/month), uploaded files are
+# ephemeral unless you add S3 storage (see below), and heavy features (big
+# file uploads, local speech-to-text) may hit the 512 MB wall.
 #
-# To switch to building THIS repo instead of the prebuilt image, replace
-# `runtime: image` + `image:` with:
-#     runtime: docker
-#     dockerfilePath: ./Dockerfile
-#     dockerContext: .
-# (Full build needs a paid plan: slower, heavier, and needs a disk.)
+# To switch to building THIS repo's full Dockerfile (heavier, needs a paid
+# plan + disk), point dockerfilePath at ./Dockerfile instead.
 
 services:
   - type: web
