@@ -72,8 +72,11 @@ services:
         value: 'true'
       - key: ANONYMIZED_TELEMETRY
         value: 'false'
-      # Render injects $PORT (default 10000) at runtime and start.sh
-      # already honors it — do NOT hardcode PORT here.
+      # Render routes traffic to the port your service binds. Pinning this
+      # explicitly (Render's default is 10000) removes any doubt about
+      # $PORT injection on image-runtime services — start.sh honors it.
+      - key: PORT
+        value: '10000'
 
       # ---- Optional: persistent file uploads via S3-compatible storage ----
       # Without this, uploaded files/avatars vanish on restart/redeploy.
